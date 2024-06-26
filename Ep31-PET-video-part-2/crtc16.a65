@@ -1,0 +1,1041 @@
+
+        ; This program utilizes the vertical retrace IRQ 
+	; and the VIA timer to draw a moving sine wave
+	; to the right of the screen
+	;
+	; using the VIA timer it should even work such that 
+	; it can be easily adapted to other screen geometries
+
+        ; It assumes graphics/uppercase mode
+        ; 
+        ; It uses the VIA timer to step from the original vsync IRQ to
+        ; the next rasterline. This of course doubles the jitter,
+        ; well...
+
+; VICE has a one-off error
+VICE		=0
+
+; 4032 12" machine
+CYCLESPERLINE   = 50
+LINESPERCHAR    = 8
+VERTTOTAL       = 50
+VERTADJUST      = 0
+VSYNCPOS        = 37
+ORIGHSYNC       = 41
+
+; where is the effect on screen? (character line)
+EFFECTLINE      = 0
+
+        ; For a 50Hz (europe) 80 columns machine in graphics/upper case
+        ; mode (8 rasterlines/char, 59 cycles/rasterline)
+        ; a frame takes 20001 cycles. vsync starts at cycle 16048 
+        ; counted from the first visible screen cycle (first rasterline
+        ; of character at $8000), so we have about 3953 cycles till
+        ; start of screen.
+        ;IRQ2SCREEN     = 3953
+
+        ; For 50 Hz 4032 in graph / upper case, vsync starts at
+        ; VSYNCPOS * LINESPERCHAR * CYCLESPERLINE 
+        ; = 37 * 8 * 50 
+        ; = 14800
+        ; which is where the interrupt triggers.
+        ; The full screen is 
+        ; (VERTTOTAL * LINESPERCHAR + VERTADJUST) * CYCLESPERLINE
+        ; = (50 * 8 + 0) * 50
+        ; = 20000
+        ; So, from vsync interrupt to start of (next) screen we have
+        ; full screen - vsync start
+        ; = 20000 - 14800
+        ; = 5200
+IRQ2SCREEN      = ((VERTTOTAL - VSYNCPOS) * LINESPERCHAR + VERTADJUST) * CYCLESPERLINE
+
+        ; ADJUST is to account for the interrupt code in the kernel
+        ; We need to count it twice, as we run the kernel interrupt twice
+        ; once for vsync, then for the VIA interrupt
+ADJUST          = 2*36
+
+	; value to set the VIA timer to after vsync, at the start
+	; of the rasterline before the first rasterline of the characters
+	; in EFFECTLINE.
+OFFSET = IRQ2SCREEN + (CYCLESPERLINE * ((LINESPERCHAR * EFFECTLINE) - 0 + VICE)) - ADJUST
+
+	; zp addresses
+ptr	=1
+start	=ptr		; what entry in line to start with
+cnt	=ptr+1		; where we are in the line
+
+
+	.word $0401
+	*=$0401
+
+	.word endline
+	.word 10
+
+	.byt $9e
+	.asc "1056", 0
+endline	.word 0
+	.dsb 1056-*, 0
+
+	; start of prg 
+
+irqvec	=$90
+irqmode	=$033c
+irqsave	=$033d
+
+        lda #142        ; graphics/uppercase
+        jsr $ffd2
+        lda #147        ; clr home
+        jsr $ffd2
+
+	jsr dispramp	; show static ramp for verification
+
+lkey	jsr $ffe4
+	beq lkey
+
+	jsr setcrtc
+
+	lda #0
+	sta start
+
+	lda irqvec
+	sta irqsave
+	lda irqvec+1
+	sta irqsave+1
+
+	lda #0
+	sta irqmode
+
+	sei
+	lda #<newirq
+	sta irqvec
+	lda #>newirq
+	sta irqvec+1
+	cli
+
+	rts
+
+	; Interrupt routine. 
+	; The CRTC interrupt is triggered at the leading edge of
+	; the vertical sync pulse. 
+	;
+	; For a 50Hz (europe) 80 columns machine in graphics/upper case
+ 	; mode (8 rasterlines/char, 59 cycles/rasterline)
+	; a frame takes 20001 cycles. vsync starts at cycle 16048 
+	; counted from the first visible screen cycle (first rasterline
+	; of character at $8000), so we have about 3953 cycles till
+	; start of screen.
+	;
+	; The ROM interrupt routine takes 36 cycles.
+
+newirq	.(
+	lda $e813
+	bpl novsync
+	jmp vsync
+novsync
+	; cy = 6	- due to ADJUST above, timer includes kernel code
+
+	lda $e844	; clear VIA T1 IRQ flag
+
+	ldx start
+
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+40-2
+	lda ramp+1,y
+	sta $8000+40-1
+
+	inx
+	dec cnt0
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+80-2
+	lda ramp+1,y
+	sta $8000+80-1
+
+	inx
+	dec cnt1
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+120-2
+	lda ramp+1,y
+	sta $8000+120-1
+
+	inx
+	dec cnt2
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+160-2
+	lda ramp+1,y
+	sta $8000+160-1
+
+	inx
+	dec cnt3
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+200-2
+	lda ramp+1,y
+	sta $8000+200-1
+
+	inx
+	dec cnt4
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+240-2
+	lda ramp+1,y
+	sta $8000+240-1
+
+	inx
+	dec cnt5
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+280-2
+	lda ramp+1,y
+	sta $8000+280-1
+
+	inx
+	dec cnt6
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+320-2
+	lda ramp+1,y
+	sta $8000+320-1
+
+	inx
+	dec cnt7
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+360-2
+	lda ramp+1,y
+	sta $8000+360-1
+
+	inx
+	dec cnt8
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+400-2
+	lda ramp+1,y
+	sta $8000+400-1
+
+	inx
+	dec cnt9
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+440-2
+	lda ramp+1,y
+	sta $8000+440-1
+
+	inx
+	dec cnta
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+480-2
+	lda ramp+1,y
+	sta $8000+480-1
+
+	inx
+	dec cntb
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+520-2
+	lda ramp+1,y
+	sta $8000+520-1
+
+	inx
+	dec cntc
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+560-2
+	lda ramp+1,y
+	sta $8000+560-1
+
+	inx
+	dec cntd
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+600-2
+	lda ramp+1,y
+	sta $8000+600-1
+
+	inx
+	dec cnte
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+640-2
+	lda ramp+1,y
+	sta $8000+640-1
+
+	inx
+	dec cntf
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+680-2
+	lda ramp+1,y
+	sta $8000+680-1
+
+	inx
+	dec cntg
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+720-2
+	lda ramp+1,y
+	sta $8000+720-1
+
+	inx
+	dec cnth
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+760-2
+	lda ramp+1,y
+	sta $8000+760-1
+
+	inx
+	dec cnti
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+800-2
+	lda ramp+1,y
+	sta $8000+800-1
+
+	inx
+	dec cntj
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+840-2
+	lda ramp+1,y
+	sta $8000+840-1
+
+	inx
+	dec cntk
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+880-2
+	lda ramp+1,y
+	sta $8000+880-1
+
+	inx
+	dec cntl
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+920-2
+	lda ramp+1,y
+	sta $8000+920-1
+
+	inx
+	dec cntm
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+960-2
+	lda ramp+1,y
+	sta $8000+960-1
+
+	inx
+	dec cntn
+	bne loop1
+	.)
+	.(
+loop1	
+	bit $e84d	; check T1 underflow
+	bvc loop1
+	lda $e844	; clear VIA T1 IRQ flag
+	
+	ldy line,x
+	lda ramp,y
+	sta $8000+1000-2
+	lda ramp+1,y
+	sta $8000+1000-1
+
+	inx
+	dec cnto
+	bne loop1
+	.)
+
+	lda #$40
+	sta $e84e	; disable T1 IRQ
+
+	lda #8
+	sta cnt0
+	sta cnt1
+	sta cnt2
+	sta cnt3
+	sta cnt4
+	sta cnt5
+	sta cnt6
+	sta cnt7
+	sta cnt8
+	sta cnt9
+	sta cnta
+	sta cntb
+	sta cntc
+	sta cntd
+	sta cnte
+	sta cntf
+	sta cntg
+	sta cnth
+	sta cnti
+	sta cntj
+	sta cntk
+	sta cntl
+	sta cntm
+	sta cntn
+	sta cnto
+
+	inc start
+
+	jmp $e600
+
+cnt0	.byt 8
+cnt1	.byt 8
+cnt2	.byt 8
+cnt3	.byt 8
+cnt4	.byt 8
+cnt5	.byt 8
+cnt6	.byt 8
+cnt7	.byt 8
+cnt8	.byt 8
+cnt9	.byt 8
+cnta	.byt 8
+cntb	.byt 8
+cntc	.byt 8
+cntd	.byt 8
+cnte	.byt 8
+cntf	.byt 8
+cntg	.byt 8
+cnth	.byt 8
+cnti	.byt 8
+cntj	.byt 8
+cntk	.byt 8
+cntl	.byt 8
+cntm	.byt 8
+cntn	.byt 8
+cnto	.byt 8
+
+	; ----------------------------------
+vsync
+	; set IRQ to the beginning of the 1st scanline of the 23rd charline
+	; this routine takes approx. 33 cycles until timer start
+	; jmp (irqsave)
+
+	lda #$40	; T1 free running
+	sta $e84b	; T1 mode
+	lda #$c0
+	sta $e84e	; enable T1 IRQ
+	sta $e84d	; clear T1 IRQ flag
+	lda #<OFFSET-53
+	ldy #>OFFSET-53
+	sta $e844	; low latch
+	sty $e845	; high latch/counter, transfer low latch to counter
+
+	; reload the timer _latch_ with number of cycles per rasterline
+	; so that on the next underflow, it is already set
+	; (VIA feature)
+	lda #CYCLESPERLINE-2
+	sta $e846	; low latch
+	lda #0
+	sta $e847	; high latch 
+
+	; init variables used in beam racing
+	lda start
+	sta cnt
+
+
+	jmp (irqsave)
+	.)
+
+dispramp .(
+	jsr dispchars
+	jsr dispramp1
+	jsr dispramp2
+	jsr dispramp3
+	jsr dispramp4
+	jsr dispframe1
+	jsr dispframe2
+	jsr dispframe3
+	jsr dispframe4
+	jsr disprest
+	rts
+	.)
+
+dispchars .(
+	lda #<$8000+160
+	sta ptr
+	lda #>$8000+160
+	sta ptr+1
+
+	ldy #0
+l	tya
+	sta (ptr),y
+	iny
+
+	tya
+	and #$0f
+	bne l
+
+	lda ptr
+	clc
+	adc #40-16
+	sta ptr
+	bcc next
+	inc ptr+1
+next	tya
+	bne l
+	rts
+	.)
+dispramp1 .(
+	lda #<$8000+160+18+8*40
+	sta ptr
+	lda #>$8000+160+18+8*40
+	sta ptr+1
+
+	ldx #0
+l	ldy #0
+	;lda ramp,x
+	;sta (ptr),y
+	inx
+	;iny
+	lda ramp,x
+	sta (ptr),y
+
+	lda ptr
+	clc
+	adc #40
+	sta ptr
+	bcc next
+	inc ptr+1
+next	inx
+	cpx #16		; 17 entries with two bytes each
+	bcc l
+	rts
+	.)
+
+dispramp2 .(
+	lda #<$8000+160+18
+	sta ptr
+	lda #>$8000+160+18
+	sta ptr+1
+
+	ldx #0
+l	ldy #0
+	lda ramp2,x
+	sta (ptr),y
+	;inx
+	iny
+	;lda ramp,x
+	;sta (ptr),y
+
+	lda ptr
+	clc
+	adc #40
+	sta ptr
+	bcc next
+	inc ptr+1
+next	inx
+	cpx #8
+	bcc l
+	rts
+	.)
+
+dispramp3 .(
+	lda #<$8000+22*40
+	sta ptr
+	lda #>$8000+22*40
+	sta ptr+1
+
+	ldy #0
+l	lda ramp3,y
+	sta (ptr),y
+	iny
+
+	cpy #8
+	bcc l
+	rts
+	.)
+
+dispramp4 .(
+	lda #<$8000+22*40+8
+	sta ptr
+	lda #>$8000+22*40+8
+	sta ptr+1
+
+	ldy #0
+l	lda ramp4,y
+	sta (ptr),y
+	iny
+
+	cpy #8
+	bcc l
+	rts
+	.)
+
+dispframe1 .(
+	lda #<$8000+160+22
+	sta ptr
+	lda #>$8000+160+22
+	sta ptr+1
+
+	ldx #0
+l2	ldy #0
+l	lda frame1,x
+	sta (ptr),y
+	inx
+	iny
+	cpy #5
+	bcc l
+
+	lda ptr
+	clc
+	adc #40
+	sta ptr
+	bcc next
+	inc ptr+1
+next	cpx #25
+	bcc l2
+	rts
+	.)
+
+dispframe2 .(
+	lda #<$8000+160+22+6*40
+	sta ptr
+	lda #>$8000+160+22+6*40
+	sta ptr+1
+
+	ldx #0
+l2	ldy #0
+l	lda frame2,x
+	sta (ptr),y
+	inx
+	iny
+	cpy #5
+	bcc l
+
+	lda ptr
+	clc
+	adc #40
+	sta ptr
+	bcc next
+	inc ptr+1
+next	cpx #25
+	bcc l2
+	rts
+	.)
+
+dispframe3 .(
+	lda #<$8000+160+22+12*40
+	sta ptr
+	lda #>$8000+160+22+12*40
+	sta ptr+1
+
+	ldx #0
+l2	ldy #0
+l	lda frame3,x
+	sta (ptr),y
+	inx
+	iny
+	cpy #7
+	bcc l
+
+	lda ptr
+	clc
+	adc #40
+	sta ptr
+	bcc next
+	inc ptr+1
+next	cpx #21
+	bcc l2
+	rts
+	.)
+
+dispframe4 .(
+	lda #<$8000+160+22+16*40
+	sta ptr
+	lda #>$8000+160+22+16*40
+	sta ptr+1
+
+	ldx #0
+l2	ldy #0
+l	lda frame4,x
+	sta (ptr),y
+	inx
+	iny
+	cpy #7
+	bcc l
+
+	lda ptr
+	clc
+	adc #40
+	sta ptr
+	bcc next
+	inc ptr+1
+next	cpx #21
+	bcc l2
+	rts
+	.)
+
+disprest .(
+	lda #<$8000+22*40+17
+	sta ptr
+	lda #>$8000+22*40+17
+	sta ptr+1
+
+	ldy #0
+l	lda rest,y
+	sta (ptr),y
+	iny
+
+	cpy #5
+	bcc l
+	rts
+	.)
+
+
+	; filled from right, 16 screen codes with increasing fill level (0-15)
+ramp	;.byt 32, 32		; 0 cols filled	- offset 0
+	.byt 32, 6*16+7		; 1 cols filled	- offset 2
+	.byt 32, 6*16+10	; 2 cols filled	- offset 4
+	.byt 32, 7*16+6		; 3 cols filled	- offset 6
+	.byt 32, 14*16+1	; 4 cols filled	- offset 8
+	.byt 32, 15*16+5	; 5 cols filled	- offset 10
+	.byt 32, 15*16+4	; 6 cols filled	- offset 12
+	.byt 32, 14*16+5	; 7 cols filled	- offset 14
+	.byt 32, 160		; 8 cols filled	- offset 16
+	.byt 6*16+7, 160	; 9 cols filled	- offset 18
+	.byt 6*16+10, 160	; 10 cols filled - offset 20
+	.byt 7*16+6, 160	; 11 cols filled - offset 22
+	.byt 14*16+1, 160	; 12 cols filled - offset 24
+	.byt 15*16+5, 160	; 13 cols filled - offset 26
+	.byt 15*16+4, 160	; 14 cols filled - offset 28
+	.byt 14*16+5, 160	; 15 cols filled - offset 30
+	.byt 160, 160		; 16 cols filled - offset 32
+
+ramp2	.byt 6*16+7
+	.byt 5*16+9
+	.byt 4*16+8
+	.byt 5*16+13
+	.byt 4*16+2
+	.byt 4*16+7
+	.byt 5*16+4
+	.byt 6*16+5
+
+ramp3	.byt 6*16+4
+	.byt 5*16+2
+	.byt 4*16+6
+	.byt 4*16+0
+	.byt 4*16+3
+	.byt 4*16+4
+	.byt 4*16+5
+	.byt 6*16+3
+
+ramp4	.byt 6*16+4
+	.byt 6*16+15
+	.byt 7*16+9
+	.byt 6*16+2
+	.byt 15*16+8
+	.byt 15*16+7
+	.byt 14*16+3
+	.byt 160
+
+; edgy frame
+frame1	.byt 7*16+0, 4*16+0, 7*16+2, 4*16+0, 6*16+14
+	.byt 5*16+13,5*16+8, 5*16+13,4*16+1, 5*16+13
+	.byt 6*16+11,4*16+0, 5*16+11,4*16+0, 7*16+3
+	.byt 5*16+13,5*16+3, 5*16+13,5*16+10,5*16+13
+	.byt 6*16+13,4*16+0, 7*16+1, 4*16+0, 7*16+13
+
+; curvy frame
+frame2	.byt 5*16+5, 4*16+0, 7*16+2, 4*16+0, 4*16+9
+	.byt 5*16+13,5*16+12,5*16+13,6*16+8, 5*16+13
+	.byt 6*16+11,4*16+0, 5*16+11,4*16+0, 7*16+3
+	.byt 5*16+13,6*16+6, 5*16+13,5*16+14,5*16+13
+	.byt 4*16+10,4*16+0, 7*16+1, 4*16+0, 4*16+11
+
+; outer frame, cross
+frame3	.byt 4*16+15, 6*16+3, 5*16+0,	32, 4*16+13, 32, 4*16+14
+	.byt 6*16+5 ,     32, 6*16+7,	32, 5*16+1,  5*16+6, 5*16+7
+	.byt 4*16+12,6*16+4, 7*16+10,	32, 4*16+14, 32, 4*16+13
+
+; thick frames (inner/outer)
+frame4	.byt 6*16+12, 6*16+2, 7*16+11,	32, 14*16+12, 14*16+2, 15*16+11
+	.byt 14*16+1 , 32, 6*16+1,	32, 6*16+1,  15*16+15, 14*16+1
+	.byt 7*16+12,14*16+2, 7*16+14,	32, 15*16+12, 6*16+2, 15*16+14
+
+rest	.byt 5*16+15, 32, 6*16+9, 32, 32
+
+; sine wave (two periods)
+line	.(
+	.byt 16 , 16 , 16 , 18 , 18 , 18 , 20 , 20 
+	.byt 22 , 22 , 22 , 24 , 24 , 24 , 26 , 26 
+	.byt 26 , 26 , 28 , 28 , 28 , 28 , 30 , 30 
+	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+	.byt 30 , 30 , 30 , 28 , 28 , 28 , 28 , 26 
+	.byt 26 , 26 , 26 , 24 , 24 , 24 , 22 , 22 
+	.byt 22 , 20 , 20 , 18 , 18 , 18 , 16 , 16 
+	.byt 16 , 14 , 14 , 12 , 12 , 12 , 10 , 10 
+	.byt 8 , 8 , 8 , 6 , 6 , 6 , 4 , 4 
+	.byt 4 , 4 , 2 , 2 , 2 , 2 , 0 , 0 
+	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+	.byt 0 , 0 , 0 , 2 , 2 , 2 , 2 , 4 
+	.byt 4 , 4 , 4 , 6 , 6 , 6 , 8 , 8 
+	.byt 8 , 10 , 10 , 12 , 12 , 12 , 14 , 14 
+	.byt 14 , 16 , 16 , 18 , 18 , 18 , 20 , 20 
+	.byt 22 , 22 , 22 , 24 , 24 , 24 , 26 , 26 
+	.byt 26 , 26 , 28 , 28 , 28 , 28 , 30 , 30 
+	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+	.byt 30 , 30 , 30 , 28 , 28 , 28 , 28 , 26 
+	.byt 26 , 26 , 26 , 24 , 24 , 24 , 22 , 22 
+	.byt 22 , 20 , 20 , 18 , 18 , 18 , 16 , 16 
+	.byt 16 , 14 , 14 , 12 , 12 , 12 , 10 , 10 
+	.byt 8 , 8 , 8 , 6 , 6 , 6 , 4 , 4 
+	.byt 4 , 4 , 2 , 2 , 2 , 2 , 0 , 0 
+	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+	.byt 0 , 0 , 0 , 2 , 2 , 2 , 2 , 4 
+	.byt 4 , 4 , 4 , 6 , 6 , 6 , 8 , 8 
+	.byt 8 , 10 , 10 , 12 , 12 , 12 , 14 , 14 
+	.)
+
+; sine wave (single period)
+;line	.(
+;	.byt 16 , 16 , 16 , 16 , 16 , 16 , 18 , 18 
+;	.byt 18 , 18 , 18 , 20 , 20 , 20 , 20 , 20 
+;	.byt 22 , 22 , 22 , 22 , 22 , 22 , 24 , 24 
+;	.byt 24 , 24 , 24 , 24 , 26 , 26 , 26 , 26 
+;	.byt 26 , 26 , 26 , 28 , 28 , 28 , 28 , 28 
+;	.byt 28 , 28 , 28 , 28 , 30 , 30 , 30 , 30 
+;	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+;	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+;	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+;	.byt 30 , 30 , 30 , 30 , 30 , 30 , 30 , 30 
+;	.byt 30 , 30 , 30 , 30 , 30 , 28 , 28 , 28 
+;	.byt 28 , 28 , 28 , 28 , 28 , 28 , 26 , 26 
+;	.byt 26 , 26 , 26 , 26 , 26 , 24 , 24 , 24 
+;	.byt 24 , 24 , 24 , 22 , 22 , 22 , 22 , 22 
+;	.byt 22 , 20 , 20 , 20 , 20 , 20 , 18 , 18 
+;	.byt 18 , 18 , 18 , 16 , 16 , 16 , 16 , 16 
+;	.byt 16 , 14 , 14 , 14 , 14 , 14 , 12 , 12 
+;	.byt 12 , 12 , 12 , 10 , 10 , 10 , 10 , 10 
+;	.byt 8 , 8 , 8 , 8 , 8 , 8 , 6 , 6 
+;	.byt 6 , 6 , 6 , 6 , 4 , 4 , 4 , 4 
+;	.byt 4 , 4 , 4 , 2 , 2 , 2 , 2 , 2 
+;	.byt 2 , 2 , 2 , 2 , 0 , 0 , 0 , 0 
+;	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+;	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+;	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+;	.byt 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 
+;	.byt 0 , 0 , 0 , 0 , 0 , 2 , 2 , 2 
+;	.byt 2 , 2 , 2 , 2 , 2 , 2 , 4 , 4 
+;	.byt 4 , 4 , 4 , 4 , 4 , 6 , 6 , 6 
+;	.byt 6 , 6 , 6 , 8 , 8 , 8 , 8 , 8 
+;	.byt 8 , 10 , 10 , 10 , 10 , 10 , 12 , 12 
+;	.byt 12 , 12 , 12 , 14 , 14 , 14 , 14 , 14 
+;	.)
+
+
+setcrtc .(
+        ldx #0
+loop    lda regs,x
+        stx $e880
+        sta $e881
+        inx
+        cpx #10
+        bcc loop
+        rts
+
+regs    .byt CYCLESPERLINE-1, $28, ORIGHSYNC, $0f
+        .byt VERTTOTAL-1, VERTADJUST, $19, VSYNCPOS
+        .byt $00, LINESPERCHAR-1
+
+table	.byt 
+        .)
+

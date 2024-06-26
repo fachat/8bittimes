@@ -1,0 +1,232 @@
+
+	; This program utilizes the vertical retrace IRQ 
+	; to move the next to last line of the screen two chars to the 
+	; left. It assumes graphics/uppercase mode
+	; 
+	; It uses the VIA timer to step from the original vsync IRQ to
+	; the next rasterline. This of course doubles the jitter,
+	; well...
+	
+
+; 4032 12" machine
+CYCLESPERLINE	= 50
+LINESPERCHAR	= 8
+VERTTOTAL	= 50
+VERTADJUST	= 0
+VSYNCPOS	= 37
+ORIGHSYNC	= 41
+
+; where is the effect on screen?
+EFFECTLINE	= 15
+
+	; For a 50Hz (europe) 80 columns machine in graphics/upper case
+ 	; mode (8 rasterlines/char, 59 cycles/rasterline)
+	; a frame takes 20001 cycles. vsync starts at cycle 16048 
+	; counted from the first visible screen cycle (first rasterline
+	; of character at $8000), so we have about 3953 cycles till
+	; start of screen.
+	;IRQ2SCREEN	= 3953
+
+	; For 50 Hz 4032 in graph / upper case, vsync starts at
+	; VSYNCPOS * LINESPERCHAR * CYCLESPERLINE 
+	; = 37 * 8 * 50 
+	; = 14800
+	; which is where the interrupt triggers.
+	; The full screen is 
+	; (VERTTOTAL * LINESPERCHAR + VERTADJUST) * CYCLESPERLINE
+	; = (50 * 8 + 0) * 50
+	; = 20000
+	; So, from vsync interrupt to start of (next) screen we have
+	; full screen - vsync start
+	; = 20000 - 14800
+	; = 5200
+IRQ2SCREEN	= ((VERTTOTAL - VSYNCPOS) * LINESPERCHAR + VERTADJUST) * CYCLESPERLINE
+
+	; ADJUST is to account for the interrupt code in the kernel
+	; We need to count it twice, as we run the kernel interrupt twice
+	; once for vsync, then for the VIA interrupt
+ADJUST		= 2*36
+
+	; value to set the VIA timer to after vsync, at the start of 
+	; the first rasterline of the character line EFFECTLINE
+	; we have to substract one rasterline, as the start of a rasterline
+	; on the screen is determined by the distance beween hsync
+	; and total length of line of the previous rasterline
+OFFSET 		= IRQ2SCREEN + (CYCLESPERLINE * ((LINESPERCHAR * EFFECTLINE) - 1)) - ADJUST
+
+#print OFFSET
+
+	.word $0401
+	*=$0401
+
+	.word endline
+	.word 10
+
+	.byt $9e
+	.asc "1056", 0
+endline	.word 0
+	.dsb 1056-*, 0
+
+	; start of prg 
+
+irqvec	=$90
+irqmode	=$033c
+irqsave	=$033d
+
+        lda #142        ; graphics/uppercase
+        jsr $ffd2
+        lda #147        ; clr home
+        jsr $ffd2
+
+	jsr setcrtc
+
+	lda #"0"
+	jsr $ffd2
+	ldy #24
+	lda #"1"
+lll1	
+	pha
+	lda #17
+	jsr $ffd2
+	pla
+	jsr $ffd2
+	clc
+	adc #1
+	cmp #"9"+1
+	bne lll
+	lda #"0"
+lll	dey
+	bne lll1
+	lda #19
+	jsr $ffd2
+
+	ldy #0
+	ldx #8
+	lda #$80
+	sta 2
+	sty 1
+lll2	lda (1),y
+	eor #$80
+	sta (1),y
+	iny
+	bne lll2
+	inc 2
+	dex
+	bne lll2
+
+	lda irqvec
+	sta irqsave
+	lda irqvec+1
+	sta irqsave+1
+
+	lda #0
+	sta irqmode
+
+	sei
+	lda #<newirq
+	sta irqvec
+	lda #>newirq
+	sta irqvec+1
+	cli
+
+	rts
+
+	; Interrupt routine. 
+	; The CRTC interrupt is triggered at the leading edge of
+	; the vertical sync pulse. 
+	;
+	;
+	; The ROM interrupt routine takes 36 cycles.
+
+newirq	.(
+	lda $e813
+	bmi vsync
+
+	lda $e844	; clear VIA T1 IRQ flag
+
+	; this is at the beginning of the charline before the effect
+	lda #0
+	sta $e880
+	lda #CYCLESPERLINE+1-1
+	sta $e881
+	
+	; cy ~22 since newirq
+	ldy #(CYCLESPERLINE-24)/5
+l0	dey
+	bne l0
+
+	; cy ~0 in new rasterline
+	lda #2
+	sta $e880
+	lda #ORIGHSYNC-1
+	sta $e881
+
+	lda #0
+	sta $e880
+	lda #CYCLESPERLINE-1
+	sta $e881
+
+	; cy ~24
+
+	; now wait LINESPERCHAR * CYCLESPERLINE cycles to get to the next
+	; charline
+	ldy #((LINESPERCHAR-1) * CYCLESPERLINE-26)/5
+ll	dey	
+	bne ll
+
+	; cy ~0
+
+	lda #0
+	sta $e880
+	lda #CYCLESPERLINE-1-1
+	sta $e881
+
+	; cy ~12
+
+	ldy #(CYCLESPERLINE-12)/5
+l1	dey
+	bne l1
+
+	lda #0
+	sta $e880
+	lda #CYCLESPERLINE-1
+	sta $e881
+
+	lda #2
+	sta $e880
+	lda #ORIGHSYNC
+	sta $e881
+
+	jmp $e600
+
+vsync
+	; set IRQ to the beginning of the 1st scanline of the 23rd charline
+	; this routine takes approx. 34 cycles from newirq until start of timer
+	; jmp (irqsave)
+
+	lda #0
+	sta $e84b	; T1 oneshot mode
+	lda #$c0
+	sta $e84e	; enable T1 IRQ
+	sta $e84d	; clear T1 IRQ flag
+	lda #<OFFSET-34
+	ldy #>OFFSET-34
+	sta $e844
+	sty $e845	
+	jmp (irqsave)
+	.)
+
+setcrtc	.(
+	ldx #0
+loop	lda regs,x
+	stx $e880
+	sta $e881
+	inx
+	cpx #10
+	bcc loop
+	rts
+
+regs	.byt CYCLESPERLINE-1, $28, ORIGHSYNC, $0f
+	.byt VERTTOTAL-1, VERTADJUST, $19, VSYNCPOS
+	.byt $00, LINESPERCHAR-1
+	.)

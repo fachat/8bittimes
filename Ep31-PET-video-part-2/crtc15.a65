@@ -1,0 +1,252 @@
+
+        ; This program utilizes the vertical retrace IRQ 
+	; to create a 2x8 character mode
+	; it does so by 
+	; 1) at the 16th rasterline, set the char height to two
+	; 2) at the 32th rasterline, set the char height to 8 again
+	; 3) increasing the total number of displayed char lines appropriately
+	;
+        ; It assumes graphics/uppercase mode
+        ; 
+        ; It uses the VIA timer to step from the original vsync IRQ to
+        ; the next rasterline. This of course doubles the jitter,
+        ; well...
+
+; VICE has a one-off error
+VICE		=0
+
+; 4032 12" machine
+CYCLESPERLINE   = 50
+LINESPERCHAR    = 8
+VERTTOTAL       = 50
+VERTADJUST      = 0
+VSYNCPOS        = 37
+ORIGHSYNC       = 41
+
+; where is the effect on screen? (character line)
+EFFECTLINE      = 15
+
+        ; For a 50Hz (europe) 80 columns machine in graphics/upper case
+        ; mode (8 rasterlines/char, 59 cycles/rasterline)
+        ; a frame takes 20001 cycles. vsync starts at cycle 16048 
+        ; counted from the first visible screen cycle (first rasterline
+        ; of character at $8000), so we have about 3953 cycles till
+        ; start of screen.
+        ;IRQ2SCREEN     = 3953
+
+        ; For 50 Hz 4032 in graph / upper case, vsync starts at
+        ; VSYNCPOS * LINESPERCHAR * CYCLESPERLINE 
+        ; = 37 * 8 * 50 
+        ; = 14800
+        ; which is where the interrupt triggers.
+        ; The full screen is 
+        ; (VERTTOTAL * LINESPERCHAR + VERTADJUST) * CYCLESPERLINE
+        ; = (50 * 8 + 0) * 50
+        ; = 20000
+        ; So, from vsync interrupt to start of (next) screen we have
+        ; full screen - vsync start
+        ; = 20000 - 14800
+        ; = 5200
+IRQ2SCREEN      = ((VERTTOTAL - VSYNCPOS) * LINESPERCHAR + VERTADJUST) * CYCLESPERLINE
+
+        ; ADJUST is to account for the interrupt code in the kernel
+        ; We need to count it twice, as we run the kernel interrupt twice
+        ; once for vsync, then for the VIA interrupt
+ADJUST          = 2*36
+
+	; value to set the VIA timer to after vsync, at the start
+	; of the rasterline before the first rasterline of the characters
+	; in EFFECTLINE.
+OFFSET = IRQ2SCREEN + (CYCLESPERLINE * ((LINESPERCHAR * EFFECTLINE) - 0 + VICE)) - ADJUST
+
+	.word $0401
+	*=$0401
+
+	.word endline
+	.word 10
+
+	.byt $9e
+	.asc "1056", 0
+endline	.word 0
+	.dsb 1056-*, 0
+
+	; start of prg 
+
+irqvec	=$90
+irqmode	=$033c
+irqsave	=$033d
+
+        lda #142        ; graphics/uppercase
+        jsr $ffd2
+        lda #147        ; clr home
+        jsr $ffd2
+
+	jsr setcrtc
+
+        lda #"0"
+        jsr $ffd2
+        ldy #24
+        lda #"1"
+lll1
+        pha
+	lda #230	; checkerboard
+	jsr $ffd2
+	lda #$9d	; crsr left
+	jsr $ffd2
+        lda #17
+        jsr $ffd2
+        pla
+        jsr $ffd2
+        clc
+        adc #1
+        cmp #"9"+1
+        bne lll
+        lda #"0"
+lll     dey
+        bne lll1
+	lda #230	; checkerboard
+	jsr $ffd2
+        lda #19
+        jsr $ffd2
+
+        ldy #0
+        ldx #8
+        lda #$80
+        sta 2
+        sty 1
+lll2    lda (1),y
+        eor #$80
+        sta (1),y
+        iny 
+        bne lll2
+        inc 2
+        dex
+        bne lll2
+
+	lda irqvec
+	sta irqsave
+	lda irqvec+1
+	sta irqsave+1
+
+	lda #0
+	sta irqmode
+
+	sei
+	lda #<newirq
+	sta irqvec
+	lda #>newirq
+	sta irqvec+1
+	cli
+
+	rts
+
+	; Interrupt routine. 
+	; The CRTC interrupt is triggered at the leading edge of
+	; the vertical sync pulse. 
+	;
+	; For a 50Hz (europe) 80 columns machine in graphics/upper case
+ 	; mode (8 rasterlines/char, 59 cycles/rasterline)
+	; a frame takes 20001 cycles. vsync starts at cycle 16048 
+	; counted from the first visible screen cycle (first rasterline
+	; of character at $8000), so we have about 3953 cycles till
+	; start of screen.
+	;
+	; The ROM interrupt routine takes 36 cycles.
+
+newirq	.(
+	lda $e813
+	bmi vsync
+
+	; cy = 6	- due to ADJUST above, timer includes kernel code
+
+	lda $e844	; clear VIA T1 IRQ flag
+
+	; this is at the beginning of the 80th charline  rasterline (EFFECTLINE=10, LINESPERCHAR=8)
+
+;	ldy #10
+;lla	dey
+;	bne lla
+
+	;rl = 0
+	lda #9
+	sta $e880
+	lda #1
+	sta $e881		; set char height to two rasterlines
+
+;	lda #1			; test timing by setting displayed chars
+;	sta $e880
+;	lda #41
+;	sta $e881
+
+	; cy = 22
+	; here 22 cycles into routine, ~58 cycles after IRQ
+
+	; sync to next relevant rasterline
+	; 16 rasterlines = 8 char lines with 2 rasterlines each
+	; i.e. we add 6 additional char lines of height 2
+	; this is added to the vertical total in the table below
+	ldy #(16 * CYCLESPERLINE - 22)/5
+ll0	dey			; wait till end of rasterline
+	bne ll0
+
+;	; cy ~ -1 for start of second rasterline
+;	; rl=58
+;	lda #9
+;	sta $e880
+;	lda #LINESPERCHAR+4-1	
+;	sta $e881		; set height to normal + 4, to compensate for 6 extra char lines
+;
+;	; cy = 11
+;
+;	; sync to beginning of next interesting rasterline
+;	ldy #(12 * LINESPERCHAR * CYCLESPERLINE - 11)/5
+;ll	dey	; 78*5-1 = 389
+;	bne ll
+;
+	; cy ~ 0 on target rasterlnes
+
+	lda #1
+	sta $e880
+	lda #40
+	sta $e881
+
+	; rl = 473
+	lda #9
+	sta $e880
+	lda #LINESPERCHAR-1
+	sta $e881		; restore lines per char
+
+	jmp $e600
+
+vsync
+	; set IRQ to the beginning of the 1st scanline of the 23rd charline
+	; this routine takes approx. 33 cycles until timer start
+	; jmp (irqsave)
+
+	lda #0
+	sta $e84b	; T1 oneshot mode
+	lda #$c0
+	sta $e84e	; enable T1 IRQ
+	sta $e84d	; clear T1 IRQ flag
+	lda #<OFFSET-28
+	ldy #>OFFSET-28
+	sta $e844
+	sty $e845	
+	jmp (irqsave)
+	.)
+
+setcrtc .(
+        ldx #0
+loop    lda regs,x
+        stx $e880
+        sta $e881
+        inx
+        cpx #10
+        bcc loop
+        rts
+
+regs    .byt CYCLESPERLINE-1, $28, ORIGHSYNC, $0f
+        .byt VERTTOTAL-1+6, VERTADJUST, $19, VSYNCPOS
+        .byt $00, LINESPERCHAR-1
+        .)
+
